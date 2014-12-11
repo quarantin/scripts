@@ -1,0 +1,9 @@
+
+Install:
+	sudo cp ./grsec-check ./grsec-upgrade /usr/local/bin/
+	sudo chmod 755 /usr/local/bin/grsec-check
+	sudo chmod 755 /usr/local/bin/grsec-upgrade
+
+Usage:
+	Run grsec-check. If there is an update available, it will tell you so.
+	For upgrading, run grsec-upgrade and wait. Then reboot.

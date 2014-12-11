@@ -1,0 +1,232 @@
+#!/bin/bash
+#
+# Grsecurity automated upgrade script
+#
+#
+# This script assumes the following:
+# - /usr/src/linux is valid and contains your latest .config
+# - kernel.org/grsecurity.net public keys have already been
+# imported in the gpg keyring and signed by your own key.
+#
+# getting Bradley Spengler public key:
+# gpg --recv-keys 4245D46A
+#
+# getting Greg Kroah-Hartman public key:
+# gpg --recv-keys 6092693E
+#
+
+PATH="/sbin:/bin:/usr/sbin:/usr/bin"
+
+EXT="xz"
+
+ROOTDIR="/usr/src"
+
+CONFIG="/usr/src/linux/.config"
+
+GRSEC_BRANCH1="stable"
+GRSEC_BRANCH2="stable2"
+#LINUX_BRANCH="v2.6/longterm/v2.6.32"
+LINUX_BRANCH="v3.0"
+
+KEYRING_GRSEC="/root/.gnupg"
+KEYRING_LINUX="/root/.gnupg"
+
+BASE_URL_GRSEC="https://grsecurity.net"
+BASE_URL_LINUX="https://www.kernel.org/pub/linux/kernel"
+
+function verify_signature ()
+{
+	echo -n "Checking signature for ${1} ... "
+	gpg --homedir "${2}" --verify "${1}" &> /dev/null
+	if [ $? -eq 0 ]; then
+		echo "OK"
+	else
+		echo "NOT OK"
+		echo "Invalid signature for ${1}"
+		exit 1
+	fi
+}
+
+function mount_boot ()
+{
+	MOUNTED="$(mount | grep /boot)"
+	BOOTPART="$(grep /boot /etc/fstab)"
+	if [ -z "${MOUNTED}" ] && [ -z "${BOOTPART}" ]; then
+		BOOTPART=0
+		return
+	fi
+
+	BOOTPART=1
+	if [ -z "${MOUNTED}" ]; then
+		mount /boot
+		if [ $? -ne 0 ]; then
+			echo "'mount /boot' failed"
+			exit 1
+		fi
+	fi
+}
+
+function umount_boot ()
+{
+	if [ $BOOTPART -eq 0 ]; then
+		return
+	fi
+
+	if [ -z "${MOUNTED}" ]; then
+		umount /boot
+	fi
+}
+
+function download_grsec ()
+{
+	curl -s -S -o "${ROOTDIR}/latest_${GRSEC_BRANCH2}_patch" "${BASE_URL_GRSEC}/latest_${GRSEC_BRANCH2}_patch" || exit 1
+
+	RAW="$(cat ${ROOTDIR}/latest_${GRSEC_BRANCH2}_patch)"
+	LATEST_GRSEC="$(echo ${RAW} | grep -o '[-a-zA-Z0-9.]*')"
+	if [ "${RAW}" != "${LATEST_GRSEC}" ]; then
+		echo "The name for latest Grsecurity ${GRSEC_BRANCH1} release seems bogus: ${RAW}"
+		exit 1
+	fi
+
+	stat "${ROOTDIR}/${LATEST_GRSEC}"     &> /dev/null &&
+	stat "${ROOTDIR}/${LATEST_GRSEC}.sig" &> /dev/null
+	if [ $? -eq 0 ]; then
+		echo "Grsecurity is already to the latest version available"
+	else
+		echo -n "Downloading latest version of grsecurity ... "
+		curl -s -S -o "${ROOTDIR}/${LATEST_GRSEC}"     "${BASE_URL_GRSEC}/${GRSEC_BRANCH1}/${LATEST_GRSEC}"     || exit 1
+		curl -s -S -o "${ROOTDIR}/${LATEST_GRSEC}.sig" "${BASE_URL_GRSEC}/${GRSEC_BRANCH1}/${LATEST_GRSEC}.sig" || exit 1
+		echo "done"
+	fi
+
+	verify_signature "${ROOTDIR}/${LATEST_GRSEC}.sig" "${KEYRING_GRSEC}"
+}
+
+function download_linux ()
+{
+	LATEST_LINUX="linux-$(echo ${LATEST_GRSEC} | cut -d- -f 3)"
+	stat "${ROOTDIR}/${LATEST_LINUX}.tar.${EXT}" &> /dev/null
+	if [ $? -eq 0 ]; then
+		echo "Linux kernel is already to the latest version available"
+	else
+		stat "${ROOTDIR}/${LATEST_LINUX}.tar"      &> /dev/null &&
+		stat "${ROOTDIR}/${LATEST_LINUX}.tar.sign" &> /dev/null
+		if [ $? -eq 0 ]; then
+			echo "Linux kernel is already to the latest version available"
+			echo "Linux tarball already decompressed"
+		else
+			echo -n "Downloading latest version of the linux kernel ... "
+			curl -s -S -o "${ROOTDIR}/${LATEST_LINUX}.tar.sign"   "${BASE_URL_LINUX}/${LINUX_BRANCH}/${LATEST_LINUX}.tar.sign"   || exit 1
+			curl -s -S -o "${ROOTDIR}/${LATEST_LINUX}.tar.${EXT}" "${BASE_URL_LINUX}/${LINUX_BRANCH}/${LATEST_LINUX}.tar.${EXT}" || exit 1
+			echo "done"
+
+			echo -n "Decompressing linux tarball ... "
+			xz -d "${ROOTDIR}/${LATEST_LINUX}.tar.${EXT}"
+			echo "done"
+		fi
+	fi
+
+	verify_signature "${ROOTDIR}/${LATEST_LINUX}.tar.sign" "${KEYRING_LINUX}"
+}
+
+function prepare_linux ()
+{
+	cd "${ROOTDIR}"
+	
+	# check if we already unpacked this linux version
+	stat "${LATEST_LINUX}" &> /dev/null
+	if [ $? -eq 0 ]; then
+		rm -rf "${LATEST_LINUX}.old"
+		mv "${LATEST_LINUX}" "${LATEST_LINUX}.old"
+		CONFIG="${ROOTDIR}/${LATEST_LINUX}.old/.config"
+	fi
+
+	# unpacking tarball
+	echo -n "Unpacking linux tarball ... "
+	tar xf "${LATEST_LINUX}.tar"
+	echo "done"
+
+	cp "${CONFIG}" "${ROOTDIR}/${LATEST_LINUX}"
+}
+
+function patch_linux ()
+{
+	cd "${ROOTDIR}/${LATEST_LINUX}"
+
+	# applying grsecurity patch
+	echo -n "Applying grsecurity patch ... "
+	patch -p1 < "../${LATEST_GRSEC}" &> grsec-patch.log
+	if [ $? -ne 0 ]; then
+		echo -e "\\n'patch -p1 < \"../${LATEST_GRSEC}\" failed"
+		echo "check ${ROOTDIR}/${LATEST_LINUX}/grsec-patch.log"
+		exit 1
+	fi
+	echo "done"
+}
+
+function build_linux ()
+{
+	cd "${ROOTDIR}/${LATEST_LINUX}"
+
+	# make silentoldconfig
+	echo "Running 'make silentoldconfig'"
+	make silentoldconfig
+	if [ $? -ne 0 ]; then
+		echo -e "\\n'make silentoldconfig' failed"
+		exit 1
+	fi
+
+	# make
+	echo -n "Running 'make' ... "
+	make &> make.log
+	if [ $? -ne 0 ]; then
+		echo -e "\\n'make' failed"
+		echo "check ${ROOTDIR}/${LATEST_LINUX}/make.log"
+		exit 1
+	fi
+	echo "done"
+}
+
+function install_linux ()
+{
+	mount_boot
+
+	# make install
+	echo -n "Running 'make install' ... "
+	make install &> make-install.log
+	if [ $? -ne 0 ]; then
+		echo -e "\\n'make install' failed"
+		exit 1
+	fi
+	echo "done"
+
+	# update symlink
+	cd "${ROOTDIR}"
+	echo "Changing symlink /usr/src/linux"
+	unlink linux
+	ln -s "${LATEST_LINUX}" linux
+
+	# uncomment only if you know what you're doing
+	# echo "Updating GRUB ... "
+	# grub2-mkconfig > /boot/grub2/grub.cfg
+
+	umount_boot
+}
+
+function main ()
+{
+	download_grsec
+
+	download_linux
+
+	prepare_linux
+
+	patch_linux
+
+	build_linux
+
+	install_linux
+}
+
+main
+

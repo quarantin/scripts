@@ -1,0 +1,42 @@
+#!/bin/bash
+
+PATH="/sbin:/bin:/usr/sbin:/usr/bin"
+
+ROOTDIR="/usr/src"
+
+GRSEC_BRANCH="stable2"
+
+BASE_URL_GRSEC="https://grsecurity.net"
+
+function check_grsec ()
+{
+	current=$(curl -s -S "${BASE_URL_GRSEC}/latest_${GRSEC_BRANCH}_patch")
+	if [ $? -ne 0 ]; then
+		echo "failed to retrieve URL: \"${BASE_URL_GRSEC}/latest_${GRSEC_BRANCH}_patch\""
+		exit 1
+	fi
+
+	installed=$(cat "${ROOTDIR}/latest_${GRSEC_BRANCH}_patch")
+	if [ $? -ne 0 ]; then
+		echo "failed to retrieve current patch version at \"${ROOTDIR}/latest_${GRSEC_BRANCH}_patch\""
+		exit 1
+	fi
+
+	echo "latest:    $current"
+	echo "installed: $installed"
+	if [ "$installed" == "$current" ]; then
+		echo "up to date"
+		exit 1
+	fi
+
+	echo "need upgrade"
+	exit 0
+}
+
+function main ()
+{
+	check_grsec
+}
+
+main
+
