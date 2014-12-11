@@ -1,0 +1,22 @@
+Dumb script to watch TV series.
+
+Dependencies
+	mplayer (sudo apt-get install mplayer).
+	osd_cat (for on screen display) (sudo apt-get install xosd-bin).
+
+Install:
+	sudo cp ./episods ./kill_mplayer /usr/local/bin
+	sudo chmod 755 /usr/local/bin/episods
+	sudo chmod 755 /usr/local/bin/kill_mplayer
+
+	Then you should add a keyboard shortcut configured to run kill_mplayer (in my case I use CTRL+SHIFT+Q)
+Usage:
+	# To watch all Dexter episods from first to last:
+	cd /mnt/series/Dexter
+	episods
+	# When you're done, just press CTRL+SHIFT+Q
+
+	# To watch random episods of The Big Bang Theory:
+	cd /mnt/series/TBBT
+	episods rand
+	# When you're done, just press CTRL+SHIFT+Q

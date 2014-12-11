@@ -1,0 +1,171 @@
+#!/bin/bash
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
+IFS="
+"
+CUR_FILE_NORMAL=".current.normal"
+CUR_FILE_RANDOM=".current.random"
+
+PLAYLIST_NORMAL=".playlist.normal"
+PLAYLIST_RANDOM=".playlist.random"
+
+DEFAULT_AUDIO_OUT=alsa
+
+ROOT="."
+FIFODIR="/tmp/MPLAYER"
+FIFO="${FIFODIR}/FIFO"
+FONT="-adobe-courier-bold-*-*-*-40-*-*-*-*-*-*-*"
+
+function prepare_fifo
+{
+	rm -rf "${FIFODIR}"
+
+	mkdir -m 700 "${FIFODIR}"
+	if [ $? -eq 1 ]; then
+		echo "FATAL: mkdir failed: ${FIFODIR}"
+		exit 1
+	fi
+
+	mkfifo "${FIFO}"
+	if [ $? -eq 1 ]; then
+		echo "FATAL: mkfifo failed: ${FIFO}"
+		exit 1
+	fi
+}
+
+function prepare_playlist
+{
+	stat "${PLAYLIST}" &> /dev/null
+	if [ $? -eq 0 ]; then
+		return
+	fi
+
+	find "${ROOT}" -type f \( -iname '*.mp4' -or -iname '*.avi' -or -iname '*.mpg' -or -iname '*.mpeg' \) | sort $SORTTYPE > "${PLAYLIST}"
+	rm -f "${CUR_FILE}"
+}
+
+function prepare_episod
+{
+	stat "${CUR_FILE}" &> /dev/null
+	if [ $? -eq 1 ]; then
+		SAVED_CUR=0
+	else
+		SAVED_CUR=$(cat "${CUR_FILE}")
+	fi
+}
+
+function play
+{
+	SUB=""
+	OPTSUB=""
+	CHARSET="default"
+	SUBFILE=$(echo "${EPISOD}" | sed 's/\(\.avi$\|\.mp4$\)/.srt/')
+	stat "${SUBFILE}" &> /dev/null
+	if [ $? -eq 0 ]; then
+
+		SUB="${SUBFILE}"
+		OPTSUB=-sub
+
+		UNICODE=$(file "${SUB}" | grep -i utf)
+		if [[ "${UNICODE}" ]]; then
+			CHARSET="utf8"
+			OPTCHARSET=-utf8
+		fi
+	fi
+
+	MSG="($CUR/$MAX) $(basename ${EPISOD}) ($CHARSET)"
+
+	echo $MSG
+	echo $MSG | osd_cat --color=white --font="$FONT" &
+	echo mplayer -slave -ao "${AUDIO_OUT}" -input "file=${FIFO}" -fs -idx $OPTCHARSET $OPTSUB "${SUB}" "${EPISOD}"
+	     #mplayer -ao jack -slave -input "file=${FIFO}" -fs -idx $OPTCHARSET $OPTSUB "${SUB}" "${EPISOD}"
+	     mplayer -slave -ao "${AUDIO_OUT}" -input "file=${FIFO}" -fs -idx $OPTCHARSET $OPTSUB "${SUB}" "${EPISOD}"
+	status=$?
+	echo "MPLAYER STATUS = $status"
+	if [ $status -eq 1 ]; then
+		echo "MPlayer returned 1, quitting."
+		exit 0
+	elif [ $status -eq 2 ]; then
+		echo "MPlayer returned 2, playing previous episod."
+		RESTART=1
+		CUR=$(($CUR < 2 ? 0 : $CUR - 2))
+		SAVED_CUR=$(($SAVED_CUR < 3 ? 0 : $SAVED_CUR - 3))
+	fi
+}
+
+function run
+{
+	CUR=0
+	MAX=$(wc -l ${PLAYLIST} | cut -f1 -d' ')
+
+	for EPISOD in $(cat "${PLAYLIST}"); do
+
+		if [ $RESTART -eq 1 ]; then
+			break
+		fi
+
+		let "CUR=1+$CUR"
+		if [ $CUR -le $SAVED_CUR ]; then
+			continue
+		fi
+
+		play "${EPISOD}"
+
+		echo "${CUR}" > "${CUR_FILE}"
+
+	done
+
+	# End of current playlist.
+	echo "End of playlist"
+	# Now we can delete the playlist and the index
+	rm -f ${PLAYLIST} ${CUR_FILE}
+}
+
+function main
+{
+	RAND=0
+	AUDIO_OUT="${DEFAULT_AUDIO_OUT}"
+	CUR_FILE="${CUR_FILE_NORMAL}"
+	PLAYLIST="${PLAYLIST_NORMAL}"
+
+	for ARG in $*; do
+
+		if [ "${ARG}" = "pulse" ] || [ "${ARG}" = "pulseaudio" ]; then
+			AUDIO_OUT=pulse
+		elif [ "${ARG}" = "alsa" ]; then
+			AUDIO_OUT=alsa
+		elif [ "${ARG}" = "rand" ] || [ "${ARG}" = "random" ]; then
+			RAND=1
+			CUR_FILE="${CUR_FILE_RANDOM}"
+			PLAYLIST="${PLAYLIST_RANDOM}"
+			SORTTYPE=-R
+
+		elif [ "${ARG}" = "new" ] || [ "${ARG}" = "reset" ]; then
+			rm -f "${CUR_FILE_NORMAL}"
+			rm -f "${CUR_FILE_RANDOM}"
+			rm -f "${PLAYLIST_NORMAL}"
+			rm -f "${PLAYLIST_RANDOM}"
+			exit 0
+
+		else
+			echo "Invalid argument: ${ARG}"
+			exit 1
+		fi
+
+	done
+
+	prepare_fifo
+
+	prepare_playlist
+
+	prepare_episod
+
+	run
+}
+
+RESTART=1
+until [ $RESTART -eq 0 ]; do
+	RESTART=0
+	main $*
+done
+

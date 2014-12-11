@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo quit $1 > /tmp/MPLAYER/FIFO &
+
